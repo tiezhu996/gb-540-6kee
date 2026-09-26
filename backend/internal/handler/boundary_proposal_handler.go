@@ -26,7 +26,12 @@ func (h *CadastralHandler) CreateProposal(c *gin.Context) {
 		fail(c, err)
 		return
 	}
-	ok(c, http.StatusCreated, item, nil)
+	view, err := h.service.GetProposal(item.ID)
+	if err != nil {
+		fail(c, err)
+		return
+	}
+	ok(c, http.StatusCreated, view, nil)
 }
 
 func (h *CadastralHandler) GetProposal(c *gin.Context) {
@@ -52,6 +57,23 @@ func (h *CadastralHandler) TransitionProposal(c *gin.Context) {
 		return
 	}
 	item, err := h.service.TransitionProposal(id, req, actor(c))
+	if err != nil {
+		fail(c, err)
+		return
+	}
+	ok(c, http.StatusOK, item, nil)
+}
+
+func (h *CadastralHandler) ReplaceProposalEvidence(c *gin.Context) {
+	id, valid := idParam(c)
+	if !valid {
+		return
+	}
+	var req dto.ProposalEvidenceUpdateRequest
+	if !bind(c, h.validate, &req) {
+		return
+	}
+	item, err := h.service.UpdateProposalEvidence(id, req, actor(c))
 	if err != nil {
 		fail(c, err)
 		return

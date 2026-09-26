@@ -20,9 +20,9 @@ func (s *CadastralService) ImportObservation(req dto.ImportObservationRequest, a
 	if _, err := geometry.ParsePoint(req.PointGeoJSON); err != nil {
 		return model.SurveyObservation{}, geoInvalid(err)
 	}
-	state := req.ObservationState
+	state := string(req.ObservationState)
 	if state == "" {
-		state = "accepted"
+		state = string(constants.ObservationAccepted)
 	}
 	item := model.SurveyObservation{
 		ParcelID: req.ParcelID, ObservationCode: strings.TrimSpace(req.ObservationCode), PointGeoJSON: req.PointGeoJSON,
@@ -72,14 +72,14 @@ func (s *CadastralService) TransitionObservation(id uint, req dto.ObservationTra
 	if item.Version != req.Version {
 		return item, conflict("observation version does not match the current record", nil)
 	}
-	to := strings.TrimSpace(req.To)
-	if !canTransitionObservation(item.ObservationState, to) {
+	to := constants.ObservationState(strings.TrimSpace(req.To))
+	if !canTransitionObservation(constants.ObservationState(item.ObservationState), to) {
 		return item, conflict("observation state transition is not allowed", nil)
 	}
 	if err := requireAnyRole(actor, constants.RoleSurveyor, constants.RoleGISAnalyst, constants.RoleAdmin); err != nil {
 		return item, err
 	}
-	if to == "superseded" {
+	if to == constants.ObservationSuperseded {
 		if req.ReplacementObservationID == nil || *req.ReplacementObservationID == item.ID {
 			return item, invalid("a different replacement_observation_id is required when superseding an observation", nil)
 		}
@@ -90,7 +90,7 @@ func (s *CadastralService) TransitionObservation(id uint, req dto.ObservationTra
 		if replacementErr != nil {
 			return item, internal("load replacement observation failed", replacementErr)
 		}
-		if replacement.ParcelID != item.ParcelID || replacement.ObservationState == "superseded" {
+		if replacement.ParcelID != item.ParcelID || !constants.ObservationState(replacement.ObservationState).UsableAsEvidence() {
 			return item, conflict("replacement observation must be an active observation on the same parcel", nil)
 		}
 	} else if req.ReplacementObservationID != nil {
@@ -99,7 +99,7 @@ func (s *CadastralService) TransitionObservation(id uint, req dto.ObservationTra
 
 	before := item
 	err = s.store.Transaction(func(tx *repository.Store) error {
-		if transitionErr := tx.Observations.Transition(id, item.Version, to, req.ReplacementObservationID, strings.TrimSpace(req.QualityNote)); transitionErr != nil {
+		if transitionErr := tx.Observations.Transition(id, item.Version, string(to), req.ReplacementObservationID, strings.TrimSpace(req.QualityNote)); transitionErr != nil {
 			return transitionErr
 		}
 		after := map[string]any{"observation_state": to, "version": item.Version + 1, "replaced_by": req.ReplacementObservationID, "quality_note": strings.TrimSpace(req.QualityNote)}
@@ -108,7 +108,7 @@ func (s *CadastralService) TransitionObservation(id uint, req dto.ObservationTra
 	if err != nil {
 		return item, conflict("observation changed while transitioning", err)
 	}
-	item.ObservationState = to
+	item.ObservationState = string(to)
 	item.Version++
 	item.ReplacedBy = req.ReplacementObservationID
 	if note := strings.TrimSpace(req.QualityNote); note != "" {

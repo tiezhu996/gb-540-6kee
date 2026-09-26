@@ -1,6 +1,10 @@
 package dto
 
-import "time"
+import (
+	"time"
+
+	"cadastral-boundary-topology-resolution/backend/internal/constants"
+)
 
 type ObservationQuery struct {
 	ParcelID *uint
@@ -10,15 +14,15 @@ type ObservationQuery struct {
 }
 
 type ImportObservationRequest struct {
-	ParcelID            uint      `json:"parcel_id" validate:"required,gt=0"`
-	ObservationCode     string    `json:"observation_code" validate:"required,min=2,max=80"`
-	PointGeoJSON        string    `json:"point_geojson" validate:"required"`
-	ObservedAt          time.Time `json:"observed_at" validate:"required"`
-	Method              string    `json:"method" validate:"required,min=2,max=48"`
-	HorizontalAccuracyM float64   `json:"horizontal_accuracy_m" validate:"required,gt=0,lte=1000"`
-	SourceChecksum      string    `json:"source_checksum" validate:"required,min=8,max=128"`
-	ObservationState    string    `json:"observation_state" validate:"omitempty,oneof=accepted rejected superseded"`
-	QualityNote         string    `json:"quality_note" validate:"max=1000"`
+	ParcelID            uint                       `json:"parcel_id" validate:"required,gt=0"`
+	ObservationCode     string                     `json:"observation_code" validate:"required,min=2,max=80"`
+	PointGeoJSON        string                     `json:"point_geojson" validate:"required"`
+	ObservedAt          time.Time                  `json:"observed_at" validate:"required"`
+	Method              string                     `json:"method" validate:"required,min=2,max=48"`
+	HorizontalAccuracyM float64                    `json:"horizontal_accuracy_m" validate:"required,gt=0,lte=1000"`
+	SourceChecksum      string                     `json:"source_checksum" validate:"required,min=8,max=128"`
+	ObservationState    constants.ObservationState `json:"observation_state" validate:"omitempty,oneof=accepted rejected superseded"`
+	QualityNote         string                     `json:"quality_note" validate:"max=1000"`
 }
 
 type ObservationTransitionRequest struct {

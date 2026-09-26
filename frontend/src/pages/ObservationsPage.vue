@@ -6,6 +6,7 @@ import GeometryEvidenceDrawer from '@/components/common/GeometryEvidenceDrawer.v
 import { useLandParcelStore } from '@/stores/land-parcel'
 import { useSurveyObservationStore } from '@/stores/survey-observation'
 import { useAuth } from '@/hooks/useAuth'
+import { isUsableObservation, observationStateLabel, observationStateTone, type ObservationState } from '@/types/enums/observation-state'
 import type { SurveyObservation } from '@/types/survey-observation'
 
 const parcels = useLandParcelStore()
@@ -30,7 +31,7 @@ const supersedeForm = reactive({ replacement_observation_id: 0, quality_note: ''
 
 const replacementOptions = computed(() => {
   if (!superseded.value) return []
-  return observations.items.filter((item) => item.id !== superseded.value?.id && item.parcel_id === superseded.value?.parcel_id && item.observation_state !== 'superseded')
+  return observations.items.filter((item) => item.id !== superseded.value?.id && item.parcel_id === superseded.value?.parcel_id && isUsableObservation(item.observation_state))
 })
 
 async function load() {
@@ -88,7 +89,7 @@ onMounted(load)
         <el-table-column label="地块" width="125"><template #default="scope">#{{ scope.row.parcel_id }}</template></el-table-column>
         <el-table-column prop="method" label="方法" width="100" />
         <el-table-column label="水平精度" width="120"><template #default="scope">±{{ scope.row.horizontal_accuracy_m }} m</template></el-table-column>
-        <el-table-column label="状态" width="125"><template #default="scope"><span>{{ scope.row.observation_state }}</span><small v-if="scope.row.replaced_by" class="muted">替代 #{{ scope.row.replaced_by }}</small></template></el-table-column>
+        <el-table-column label="状态" width="135"><template #default="scope"><el-tag :type="observationStateTone[scope.row.observation_state as ObservationState] ?? 'info'" size="small" disable-transitions>{{ observationStateLabel[scope.row.observation_state as ObservationState] ?? scope.row.observation_state }}</el-tag><small v-if="scope.row.replaced_by" class="muted">替代 #{{ scope.row.replaced_by }}</small></template></el-table-column>
         <el-table-column prop="observed_at" label="观测时间" min-width="170" />
         <el-table-column label="动作" width="230"><template #default="scope"><div class="observation-actions"><el-button text @click="showEvidence(scope.row)">证据</el-button><template v-if="auth.hasRole('surveyor', 'gis_analyst', 'admin')"><el-button v-if="scope.row.observation_state === 'accepted'" text type="danger" @click="transition(scope.row, 'rejected')"><X :size="14" />拒绝</el-button><el-button v-if="scope.row.observation_state === 'rejected'" text type="primary" @click="transition(scope.row, 'accepted')"><Check :size="14" />接受</el-button><el-button v-if="scope.row.observation_state === 'accepted'" text type="primary" @click="openSupersede(scope.row)">替代</el-button></template></div></template></el-table-column>
       </el-table>
@@ -113,7 +114,7 @@ onMounted(load)
   </el-dialog>
 
   <el-dialog v-model="supersedeOpen" title="替代观测" width="min(520px, calc(100vw - 28px))">
-    <el-form label-position="top"><el-form-item label="替代观测"><el-select v-model="supersedeForm.replacement_observation_id" placeholder="选择同一地块的观测" style="width: 100%"><el-option v-for="item in replacementOptions" :key="item.id" :label="`${item.observation_code} · ${item.observation_state}`" :value="item.id" /></el-select></el-form-item><el-form-item label="质量说明"><el-input v-model="supersedeForm.quality_note" type="textarea" :rows="3" maxlength="1000" show-word-limit /></el-form-item></el-form>
+    <el-form label-position="top"><el-form-item label="替代观测"><el-select v-model="supersedeForm.replacement_observation_id" placeholder="选择同一地块的观测" style="width: 100%"><el-option v-for="item in replacementOptions" :key="item.id" :label="`${item.observation_code} · ${observationStateLabel[item.observation_state as ObservationState]}`" :value="item.id" /></el-select></el-form-item><el-form-item label="质量说明"><el-input v-model="supersedeForm.quality_note" type="textarea" :rows="3" maxlength="1000" show-word-limit /></el-form-item></el-form>
     <template #footer><el-button @click="supersedeOpen = false">取消</el-button><el-button type="primary" :disabled="!supersedeForm.replacement_observation_id" @click="supersede">确认替代</el-button></template>
   </el-dialog>
 

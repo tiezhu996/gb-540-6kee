@@ -225,8 +225,30 @@ func (s *CadastralService) ApplyConflictSuggestion(id uint, req dto.ApplySuggest
 	if rationale == "" {
 		rationale = fmt.Sprintf("Applied deterministic suggestion from topology conflict %d.", item.ID)
 	}
+	// Carry over only observations that are still valid evidence on the same
+	// parcel; the superseded references remain archived on the source proposal.
+	sourceObservationIDs, parseIDsErr := parseProposalObservationIDs(proposal.ObservationIDs)
+	if parseIDsErr != nil {
+		return model.BoundaryProposal{}, internal("source proposal observation references are not valid JSON", parseIDsErr)
+	}
+	carriedObservationIDs := make([]uint, 0, len(sourceObservationIDs))
+	if len(sourceObservationIDs) > 0 {
+		sourceObservations, loadErr := s.store.Observations.ListByIDs(sourceObservationIDs)
+		if loadErr != nil {
+			return model.BoundaryProposal{}, internal("load source proposal observations failed", loadErr)
+		}
+		for _, sourceObservation := range sourceObservations {
+			if sourceObservation.ParcelID == proposal.ParcelID && constants.ObservationState(sourceObservation.ObservationState).UsableAsEvidence() {
+				carriedObservationIDs = append(carriedObservationIDs, sourceObservation.ID)
+			}
+		}
+	}
+	carriedObservationJSON, encodeErr := encodeObservationIDs(carriedObservationIDs)
+	if encodeErr != nil {
+		return model.BoundaryProposal{}, internal("encode carried proposal observations failed", encodeErr)
+	}
 	derived := model.BoundaryProposal{
-		ParcelID: proposal.ParcelID, BaseVersion: parcel.BoundaryVersion, ProposedGeoJSON: string(suggestion.SnappedGeoJSON), ObservationIDs: proposal.ObservationIDs,
+		ParcelID: proposal.ParcelID, BaseVersion: parcel.BoundaryVersion, ProposedGeoJSON: string(suggestion.SnappedGeoJSON), ObservationIDs: carriedObservationJSON,
 		SnapToleranceM: proposal.SnapToleranceM, AreaDeltaSquareM: polygon.Area - parcel.AreaSquareM, ProposalState: constants.ProposalDraft,
 		Rationale: rationale, Version: proposal.Version + 1, CreatedBy: actor.ID,
 	}
@@ -264,8 +286,9 @@ func (s *CadastralService) replayDetectionRun(run model.TopologyDetectionRun, re
 	return items, nil
 }
 
-func canTransitionObservation(from, to string) bool {
-	return (from == "accepted" && (to == "rejected" || to == "superseded")) || (from == "rejected" && to == "accepted")
+func canTransitionObservation(from, to constants.ObservationState) bool {
+	return (from == constants.ObservationAccepted && (to == constants.ObservationRejected || to == constants.ObservationSuperseded)) ||
+		(from == constants.ObservationRejected && to == constants.ObservationAccepted)
 }
 
 func requireAnyRole(actor Actor, roles ...string) error {

@@ -75,6 +75,8 @@ All endpoints below except login and health checks require `Authorization: Beare
 | `POST` | `/observations/import` | Import an observation |
 | `POST` | `/observations/:id/transition` | Accept, reject, or supersede an observation |
 | `GET`, `POST` | `/proposals` | List or create proposals |
+| `GET` | `/proposals/:id` | Read a proposal with its invalid-evidence projection |
+| `PATCH` | `/proposals/:id/evidence` | Replace supporting observations on an authoring proposal |
 | `POST` | `/proposals/:id/transition` | Move proposal through allowed states |
 | `GET` | `/conflicts` | List detected topology conflicts |
 | `POST` | `/conflicts/detect` | Run detection; requires an `Idempotency-Key` header |
@@ -100,7 +102,7 @@ The frontend sends every request through `/api/v1`. `parcel_ids` is persisted by
 
 The independent Gin middleware files are `request_id.go`, `recovery.go`, `auth.go`, `rbac.go`, `audit.go`, and `error_handler.go`. They establish request correlation and audit context before authentication, enforce authorization and rate limits, recover panics, and retain a uniform JSON fallback for recorded Gin errors.
 
-Allowed proposal flow is `draft -> validated -> submitted -> reviewed -> accepted/rejected`, with `reviewed -> revision -> draft`. Illegal transitions return `409`; an author cannot review their own proposal. Conflict flow is `detected -> confirmed -> resolution_proposed -> resolved -> closed`, with the alternate `detected -> false_positive -> closed` path. Applying a reviewed suggestion creates a new draft proposal version and resolves the source conflict; it does not rewrite the original proposal or parcel boundary.
+Allowed proposal flow is `draft -> validated -> submitted -> reviewed -> accepted/rejected`, with `reviewed -> revision -> draft`. Illegal transitions return `409`; an author cannot review their own proposal. A proposal can only reference observations that belong to the same parcel and are currently `accepted`; rejected or superseded evidence blocks submission (`validated -> submitted`) and acceptance (`reviewed -> accepted`) with a `409` that lists each invalid observation code and reason. Proposal responses project an `invalid_evidence` array (state, parcel mismatch, missing reference, and the archived `replaced_by` code) without rewriting the archived references; the author uses `PATCH /proposals/:id/evidence` while the proposal is in `draft`, `validated`, or `revision` state to replace stale references with still-valid observations on the same parcel. Conflict flow is `detected -> confirmed -> resolution_proposed -> resolved -> closed`, with the alternate `detected -> false_positive -> closed` path. Applying a reviewed suggestion creates a new draft proposal version carrying only still-valid evidence and resolves the source conflict; it does not rewrite the original proposal or parcel boundary.
 
 ## Coordinates And Legal Boundary
 

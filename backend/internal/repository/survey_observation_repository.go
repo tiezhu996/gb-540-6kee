@@ -50,6 +50,17 @@ func (r *SurveyObservationRepository) List(q dto.ObservationQuery) ([]model.Surv
 	return items, total, nil
 }
 
+func (r *SurveyObservationRepository) ListByIDs(ids []uint) ([]model.SurveyObservation, error) {
+	items := make([]model.SurveyObservation, 0, len(ids))
+	if len(ids) == 0 {
+		return items, nil
+	}
+	if err := r.db.Where("id IN ?", ids).Find(&items).Error; err != nil {
+		return nil, fmt.Errorf("list observations by ids: %w", err)
+	}
+	return items, nil
+}
+
 func (r *SurveyObservationRepository) Transition(id, version uint, to string, replacementID *uint, note string) error {
 	updates := map[string]any{"observation_state": to, "version": gorm.Expr("version + 1")}
 	if replacementID != nil {
