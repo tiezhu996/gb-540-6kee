@@ -1,5 +1,20 @@
 import type { ProposalState } from './enums/proposal-state'
 
+export interface InvalidObservation {
+  observation_id: number
+  observation_code: string
+  state: string
+  reason: string
+  replaced_by_id?: number
+  replaced_by_code?: string
+}
+
+export interface ProposalEvidence {
+  observation_ids: number[]
+  invalid_observations: InvalidObservation[]
+  evidence_valid: boolean
+}
+
 export interface BoundaryProposal {
   id: number
   parcel_id: number
@@ -15,4 +30,5 @@ export interface BoundaryProposal {
   reviewed_by?: number | null
   created_at: string
   updated_at: string
+  evidence?: ProposalEvidence
 }

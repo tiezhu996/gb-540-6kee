@@ -22,7 +22,7 @@ func (s *CadastralService) ImportObservation(req dto.ImportObservationRequest, a
 	}
 	state := req.ObservationState
 	if state == "" {
-		state = "accepted"
+		state = constants.ObservationAccepted
 	}
 	item := model.SurveyObservation{
 		ParcelID: req.ParcelID, ObservationCode: strings.TrimSpace(req.ObservationCode), PointGeoJSON: req.PointGeoJSON,
@@ -79,7 +79,7 @@ func (s *CadastralService) TransitionObservation(id uint, req dto.ObservationTra
 	if err := requireAnyRole(actor, constants.RoleSurveyor, constants.RoleGISAnalyst, constants.RoleAdmin); err != nil {
 		return item, err
 	}
-	if to == "superseded" {
+	if to == constants.ObservationSuperseded {
 		if req.ReplacementObservationID == nil || *req.ReplacementObservationID == item.ID {
 			return item, invalid("a different replacement_observation_id is required when superseding an observation", nil)
 		}
@@ -90,8 +90,8 @@ func (s *CadastralService) TransitionObservation(id uint, req dto.ObservationTra
 		if replacementErr != nil {
 			return item, internal("load replacement observation failed", replacementErr)
 		}
-		if replacement.ParcelID != item.ParcelID || replacement.ObservationState == "superseded" {
-			return item, conflict("replacement observation must be an active observation on the same parcel", nil)
+		if replacement.ParcelID != item.ParcelID || replacement.ObservationState != constants.ObservationAccepted {
+			return item, conflict("replacement observation must be an accepted observation on the same parcel", nil)
 		}
 	} else if req.ReplacementObservationID != nil {
 		return item, invalid("replacement_observation_id is only valid for superseded observations", nil)

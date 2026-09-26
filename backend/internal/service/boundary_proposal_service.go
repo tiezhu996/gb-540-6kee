@@ -28,11 +28,11 @@ func (s *CadastralService) CreateProposal(req dto.CreateProposalRequest, actor A
 	if parseErr != nil {
 		return model.BoundaryProposal{}, geoInvalid(parseErr)
 	}
-	for _, id := range req.ObservationIDs {
-		obs, obsErr := s.store.Observations.Get(id)
-		if obsErr != nil || obs.ParcelID != req.ParcelID {
-			return model.BoundaryProposal{}, invalid("all observations must belong to the selected parcel", obsErr)
-		}
+	// A proposal can only be drafted on evidence that is currently accepted on
+	// the selected parcel; rejected or superseded observations never enter the
+	// archived evidence set.
+	if err := s.validateEvidenceSelection(req.ParcelID, req.ObservationIDs); err != nil {
+		return model.BoundaryProposal{}, err
 	}
 	obsJSON, err := json.Marshal(req.ObservationIDs)
 	if err != nil {
@@ -55,24 +55,28 @@ func (s *CadastralService) CreateProposal(req dto.CreateProposalRequest, actor A
 	return item, nil
 }
 
-func (s *CadastralService) ListProposals(q dto.ProposalQuery) ([]model.BoundaryProposal, dto.Pagination, error) {
+func (s *CadastralService) ListProposals(q dto.ProposalQuery) ([]dto.ProposalView, dto.Pagination, error) {
 	normalizePage(&q.Page, &q.PageSize)
 	items, total, err := s.store.Proposals.List(q)
 	if err != nil {
 		return nil, dto.Pagination{}, internal("list proposals failed", err)
 	}
-	return items, dto.Pagination{Page: q.Page, PageSize: q.PageSize, Total: total}, nil
+	views, err := s.BuildProposalViews(items)
+	if err != nil {
+		return nil, dto.Pagination{}, err
+	}
+	return views, dto.Pagination{Page: q.Page, PageSize: q.PageSize, Total: total}, nil
 }
 
-func (s *CadastralService) GetProposal(id uint) (model.BoundaryProposal, error) {
+func (s *CadastralService) GetProposal(id uint) (dto.ProposalView, error) {
 	item, err := s.store.Proposals.Get(id)
 	if errors.Is(err, repository.ErrNotFound) {
-		return item, notFound("proposal")
+		return dto.ProposalView{}, notFound("proposal")
 	}
 	if err != nil {
-		return item, internal("get proposal failed", err)
+		return dto.ProposalView{}, internal("get proposal failed", err)
 	}
-	return item, nil
+	return s.BuildProposalView(item)
 }
 
 func (s *CadastralService) TransitionProposal(id uint, req dto.ProposalTransitionRequest, actor Actor) (model.BoundaryProposal, error) {
@@ -89,6 +93,13 @@ func (s *CadastralService) TransitionProposal(id uint, req dto.ProposalTransitio
 	}
 	if err := authorizeProposalTransition(item, to, actor); err != nil {
 		return item, err
+	}
+	// Submission and acceptance must be blocked while any referenced
+	// observation has been rejected, superseded, or otherwise voided.
+	if to == constants.ProposalSubmitted || to == constants.ProposalAccepted {
+		if err := s.requireActiveProposalEvidence(item); err != nil {
+			return item, err
+		}
 	}
 	updates := map[string]any{}
 	if req.Rationale != "" {
@@ -110,6 +121,60 @@ func (s *CadastralService) TransitionProposal(id uint, req dto.ProposalTransitio
 	item.Version++
 	if isProposalReviewTransition(to) {
 		item.ReviewedBy = &actor.ID
+	}
+	return item, nil
+}
+
+// UpdateProposalEvidence replaces the archived evidence set of a draft-stage
+// proposal. It is the author's recovery path after referenced observations
+// were rejected or superseded: every replacement observation must be accepted
+// and belong to the same parcel. Validation runs before any write, so a wrong
+// parcel or a voided observation leaves the proposal exactly as it was.
+func (s *CadastralService) UpdateProposalEvidence(id uint, req dto.UpdateProposalEvidenceRequest, actor Actor) (model.BoundaryProposal, error) {
+	item, err := s.store.Proposals.Get(id)
+	if errors.Is(err, repository.ErrNotFound) {
+		return item, notFound("proposal")
+	}
+	if err != nil {
+		return item, internal("get proposal failed", err)
+	}
+	if item.Version != req.Version {
+		return item, conflict("proposal version does not match the current record", nil)
+	}
+	if item.ProposalState != constants.ProposalDraft && item.ProposalState != constants.ProposalValidated && item.ProposalState != constants.ProposalRevision {
+		return item, conflict("proposal evidence can only be edited while the proposal is in draft, validated, or revision state", nil)
+	}
+	if actor.ID != item.CreatedBy && actor.Role != constants.RoleAdmin {
+		return item, &AppError{CodeForbidden, http.StatusForbidden, "only the proposal author or an administrator may update proposal evidence", nil}
+	}
+	if err := s.validateEvidenceSelection(item.ParcelID, req.ObservationIDs); err != nil {
+		return item, err
+	}
+	obsJSON, err := json.Marshal(req.ObservationIDs)
+	if err != nil {
+		return item, internal("encode proposal observations failed", err)
+	}
+	// Re-worked evidence invalidates validation: validated and revision-stage
+	// proposals return to draft and must pass the full flow again.
+	resetState := item.ProposalState != constants.ProposalDraft
+	before := item
+	err = s.store.Transaction(func(tx *repository.Store) error {
+		if updateErr := tx.Proposals.UpdateEvidence(id, item.Version, string(obsJSON), resetState); updateErr != nil {
+			return updateErr
+		}
+		after := map[string]any{"observation_ids": req.ObservationIDs, "version": item.Version + 1}
+		if resetState {
+			after["proposal_state"] = constants.ProposalDraft
+		}
+		return tx.Audits.Create(audit(actor, "proposal.evidence_updated", "BoundaryProposal", id, &item.ParcelID, snapshot(before), snapshot(after)))
+	})
+	if err != nil {
+		return item, conflict("proposal changed while updating evidence", err)
+	}
+	item.ObservationIDs = string(obsJSON)
+	item.Version++
+	if resetState {
+		item.ProposalState = constants.ProposalDraft
 	}
 	return item, nil
 }

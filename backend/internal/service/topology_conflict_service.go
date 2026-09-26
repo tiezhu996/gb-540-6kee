@@ -221,12 +221,30 @@ func (s *CadastralService) ApplyConflictSuggestion(id uint, req dto.ApplySuggest
 	if parcelErr != nil {
 		return model.BoundaryProposal{}, internal("load parcel failed", parcelErr)
 	}
+	// The derived draft only carries over evidence still accepted on the same
+	// parcel; rejected or superseded references from the source proposal are
+	// dropped (the source keeps its own archived ids).
+	inheritedIDs := proposalObservationIDs(proposal.ObservationIDs)
+	inherited, inheritedErr := s.store.Observations.ListByIDs(inheritedIDs)
+	if inheritedErr != nil {
+		return model.BoundaryProposal{}, internal("load source proposal evidence failed", inheritedErr)
+	}
+	activeIDs := make([]uint, 0, len(inheritedIDs))
+	for _, id := range inheritedIDs {
+		if obs, ok := inherited[id]; ok && obs.ParcelID == proposal.ParcelID && obs.ObservationState == constants.ObservationAccepted {
+			activeIDs = append(activeIDs, id)
+		}
+	}
+	activeObsJSON, encodeErr := json.Marshal(activeIDs)
+	if encodeErr != nil {
+		return model.BoundaryProposal{}, internal("encode inherited observations failed", encodeErr)
+	}
 	rationale := strings.TrimSpace(req.Rationale)
 	if rationale == "" {
 		rationale = fmt.Sprintf("Applied deterministic suggestion from topology conflict %d.", item.ID)
 	}
 	derived := model.BoundaryProposal{
-		ParcelID: proposal.ParcelID, BaseVersion: parcel.BoundaryVersion, ProposedGeoJSON: string(suggestion.SnappedGeoJSON), ObservationIDs: proposal.ObservationIDs,
+		ParcelID: proposal.ParcelID, BaseVersion: parcel.BoundaryVersion, ProposedGeoJSON: string(suggestion.SnappedGeoJSON), ObservationIDs: string(activeObsJSON),
 		SnapToleranceM: proposal.SnapToleranceM, AreaDeltaSquareM: polygon.Area - parcel.AreaSquareM, ProposalState: constants.ProposalDraft,
 		Rationale: rationale, Version: proposal.Version + 1, CreatedBy: actor.ID,
 	}
@@ -265,7 +283,7 @@ func (s *CadastralService) replayDetectionRun(run model.TopologyDetectionRun, re
 }
 
 func canTransitionObservation(from, to string) bool {
-	return (from == "accepted" && (to == "rejected" || to == "superseded")) || (from == "rejected" && to == "accepted")
+	return (from == constants.ObservationAccepted && (to == constants.ObservationRejected || to == constants.ObservationSuperseded)) || (from == constants.ObservationRejected && to == constants.ObservationAccepted)
 }
 
 func requireAnyRole(actor Actor, roles ...string) error {

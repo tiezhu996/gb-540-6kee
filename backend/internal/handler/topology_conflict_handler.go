@@ -73,5 +73,10 @@ func (h *CadastralHandler) ApplyConflictSuggestion(c *gin.Context) {
 		fail(c, err)
 		return
 	}
-	ok(c, http.StatusCreated, item, nil)
+	view, err := h.service.BuildProposalView(item)
+	if err != nil {
+		fail(c, err)
+		return
+	}
+	ok(c, http.StatusCreated, view, nil)
 }

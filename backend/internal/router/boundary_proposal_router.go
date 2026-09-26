@@ -12,5 +12,6 @@ func registerBoundaryProposalRoutes(api *gin.RouterGroup, deps Dependencies) {
 	proposals.GET("", h.ListProposals)
 	proposals.GET("/:id", h.GetProposal)
 	proposals.POST("", appmw.RBACMiddleware(constants.RoleSurveyor, constants.RoleGISAnalyst, constants.RoleAdmin), h.CreateProposal)
+	proposals.PATCH("/:id/evidence", appmw.RBACMiddleware(constants.RoleSurveyor, constants.RoleGISAnalyst, constants.RoleAdmin), h.UpdateProposalEvidence)
 	proposals.POST("/:id/transition", appmw.RBACMiddleware(constants.RoleSurveyor, constants.RoleGISAnalyst, constants.RoleReviewer, constants.RoleAdmin), h.TransitionProposal)
 }

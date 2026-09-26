@@ -25,10 +25,17 @@ export interface ProposalTransitionInput {
   rationale?: string
 }
 
+export interface ProposalEvidenceInput {
+  version: number
+  observation_ids: number[]
+}
+
 export const boundaryProposalApi = {
   list: (params?: ProposalQuery) => api.get<ApiEnvelope<BoundaryProposal[]>>('/proposals', { params }),
   detail: (id: number) => api.get<ApiEnvelope<BoundaryProposal>>(`/proposals/${id}`),
   create: (body: ProposalCreateInput) => api.post<ApiEnvelope<BoundaryProposal>>('/proposals', body),
   transition: (id: number, body: ProposalTransitionInput) =>
     api.post<ApiEnvelope<BoundaryProposal>>(`/proposals/${id}/transition`, body),
+  updateEvidence: (id: number, body: ProposalEvidenceInput) =>
+    api.patch<ApiEnvelope<BoundaryProposal>>(`/proposals/${id}/evidence`, body),
 }

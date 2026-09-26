@@ -3,6 +3,7 @@ package service
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -57,6 +58,27 @@ func createTestProposal(t *testing.T, svc *CadastralService, parcel model.LandPa
 		t.Fatalf("CreateProposal() error = %v", err)
 	}
 	return proposal
+}
+
+func importTestObservation(t *testing.T, svc *CadastralService, parcel model.LandParcel, code string, actor Actor) model.SurveyObservation {
+	t.Helper()
+	obs, err := svc.ImportObservation(dto.ImportObservationRequest{
+		ParcelID: parcel.ID, ObservationCode: code, PointGeoJSON: `{"type":"Point","coordinates":[1,1]}`,
+		ObservedAt: time.Date(2026, 8, 22, 9, 0, 0, 0, time.UTC), Method: "total_station", HorizontalAccuracyM: 0.02, SourceChecksum: "checksum-" + code,
+	}, actor)
+	if err != nil {
+		t.Fatalf("ImportObservation(%s) error = %v", code, err)
+	}
+	return obs
+}
+
+func authorAdvance(t *testing.T, svc *CadastralService, id, version uint, to constants.ProposalState, actor Actor) model.BoundaryProposal {
+	t.Helper()
+	item, err := svc.TransitionProposal(id, dto.ProposalTransitionRequest{To: string(to), Version: version}, actor)
+	if err != nil {
+		t.Fatalf("TransitionProposal(%s): %v", to, err)
+	}
+	return item
 }
 
 func TestDetectConflictsIsIdempotentAndRejectsRequestKeyReuse(t *testing.T) {
@@ -192,5 +214,163 @@ func TestSupersedingObservationRecordsReplacement(t *testing.T) {
 	}
 	if persisted.Version != first.Version+1 || persisted.ReplacedBy == nil || *persisted.ReplacedBy != replacement.ID {
 		t.Fatalf("persisted observation = %#v, want incremented version and replacement", persisted)
+	}
+}
+
+func TestRejectedObservationBlocksProposalSubmissionAndAcceptance(t *testing.T) {
+	svc, _ := newCadastralTestService(t)
+	author := testActor(801, constants.RoleSurveyor, "voided-evidence-author")
+	parcel := createTestParcel(t, svc, "P-VOIDED", serviceTestPolygon(`[0,0],[10,0],[10,10],[0,10],[0,0]`), author)
+	obs := importTestObservation(t, svc, parcel, "OBS-VOIDED", author)
+	proposal, err := svc.CreateProposal(dto.CreateProposalRequest{
+		ParcelID: parcel.ID, BaseVersion: parcel.BoundaryVersion, ProposedGeoJSON: serviceTestPolygon(`[0,0],[10,0],[10,10],[0,10],[0,0]`),
+		ObservationIDs: []uint{obs.ID}, SnapToleranceM: 0.1, Rationale: "supported by one observation",
+	}, author)
+	if err != nil {
+		t.Fatalf("create supported proposal: %v", err)
+	}
+	validated := authorAdvance(t, svc, proposal.ID, proposal.Version, constants.ProposalValidated, author)
+
+	// A reviewer rejects the observation after validation. The archived
+	// reference is kept, but submission must now fail with a 409 while the
+	// proposal stays validated.
+	if _, err := svc.TransitionObservation(obs.ID, dto.ObservationTransitionRequest{To: "rejected", Version: obs.Version, QualityNote: "checksum mismatch"}, author); err != nil {
+		t.Fatalf("reject observation: %v", err)
+	}
+	_, err = svc.TransitionProposal(proposal.ID, dto.ProposalTransitionRequest{To: string(constants.ProposalSubmitted), Version: validated.Version}, author)
+	var appErr *AppError
+	if !errors.As(err, &appErr) || appErr.Code != CodeConflict || appErr.Status != 409 {
+		t.Fatalf("submit with rejected evidence error = %v, want 409 %s", err, CodeConflict)
+	}
+	view, err := svc.GetProposal(proposal.ID)
+	if err != nil {
+		t.Fatalf("reload proposal: %v", err)
+	}
+	if view.ProposalState != constants.ProposalValidated || view.Version != validated.Version {
+		t.Fatalf("proposal changed after blocked submit: state %s v%d, want validated v%d", view.ProposalState, view.Version, validated.Version)
+	}
+	if view.Evidence.EvidenceValid {
+		t.Fatalf("evidence view = %#v, want invalid evidence", view.Evidence)
+	}
+	if len(view.Evidence.InvalidObservations) != 1 {
+		t.Fatalf("invalid observations = %#v, want one entry", view.Evidence.InvalidObservations)
+	}
+	invalidObs := view.Evidence.InvalidObservations[0]
+	if invalidObs.ObservationID != obs.ID || invalidObs.State != "rejected" || !strings.Contains(invalidObs.Reason, "rejected") {
+		t.Fatalf("invalid observation view = %#v, want rejected reason", invalidObs)
+	}
+}
+
+func TestSupersededObservationBlocksAcceptanceUntilResupported(t *testing.T) {
+	svc, _ := newCadastralTestService(t)
+	author := testActor(811, constants.RoleSurveyor, "superseded-evidence-author")
+	reviewer := testActor(812, constants.RoleReviewer, "superseded-evidence-reviewer")
+	parcel := createTestParcel(t, svc, "P-SUPERSEDE", serviceTestPolygon(`[0,0],[10,0],[10,10],[0,10],[0,0]`), author)
+	original := importTestObservation(t, svc, parcel, "OBS-ORIGINAL-SUPERSEDE", author)
+	replacement := importTestObservation(t, svc, parcel, "OBS-NEW-SUPERSEDE", author)
+	proposal, err := svc.CreateProposal(dto.CreateProposalRequest{
+		ParcelID: parcel.ID, BaseVersion: parcel.BoundaryVersion, ProposedGeoJSON: serviceTestPolygon(`[0,0],[10,0],[10,10],[0,10],[0,0]`),
+		ObservationIDs: []uint{original.ID}, SnapToleranceM: 0.1, Rationale: "supported by original observation",
+	}, author)
+	if err != nil {
+		t.Fatalf("create supported proposal: %v", err)
+	}
+	validated := authorAdvance(t, svc, proposal.ID, proposal.Version, constants.ProposalValidated, author)
+	submitted := authorAdvance(t, svc, proposal.ID, validated.Version, constants.ProposalSubmitted, author)
+	reviewed, err := svc.TransitionProposal(proposal.ID, dto.ProposalTransitionRequest{To: string(constants.ProposalReviewed), Version: submitted.Version}, reviewer)
+	if err != nil {
+		t.Fatalf("review proposal: %v", err)
+	}
+
+	if _, err := svc.TransitionObservation(original.ID, dto.ObservationTransitionRequest{
+		To: "superseded", Version: original.Version, ReplacementObservationID: &replacement.ID,
+	}, author); err != nil {
+		t.Fatalf("supersede observation: %v", err)
+	}
+	_, err = svc.TransitionProposal(proposal.ID, dto.ProposalTransitionRequest{To: string(constants.ProposalAccepted), Version: reviewed.Version}, reviewer)
+	var appErr *AppError
+	if !errors.As(err, &appErr) || appErr.Code != CodeConflict || appErr.Status != 409 {
+		t.Fatalf("accept with superseded evidence error = %v, want 409 %s", err, CodeConflict)
+	}
+	view, err := svc.GetProposal(proposal.ID)
+	if err != nil {
+		t.Fatalf("reload blocked proposal: %v", err)
+	}
+	invalidObs := view.Evidence.InvalidObservations
+	if len(invalidObs) != 1 || invalidObs[0].State != "superseded" || invalidObs[0].ReplacedByID == nil || *invalidObs[0].ReplacedByID != replacement.ID || invalidObs[0].ReplacedByCode != "OBS-NEW-SUPERSEDE" {
+		t.Fatalf("invalid evidence = %#v, want superseded with replacement %d", invalidObs, replacement.ID)
+	}
+	if view.ProposalState != constants.ProposalReviewed {
+		t.Fatalf("proposal state = %s, want reviewed preserved", view.ProposalState)
+	}
+
+	// The reviewer routes the blocked proposal back for revision; once it is
+	// in revision the author can re-support it with the replacement accepted
+	// observation, which returns the proposal to draft.
+	revision, err := svc.TransitionProposal(proposal.ID, dto.ProposalTransitionRequest{To: string(constants.ProposalRevision), Version: view.Version}, reviewer)
+	if err != nil {
+		t.Fatalf("reviewer request revision: %v", err)
+	}
+	updated, err := svc.UpdateProposalEvidence(proposal.ID, dto.UpdateProposalEvidenceRequest{Version: revision.Version, ObservationIDs: []uint{replacement.ID}}, author)
+	if err != nil {
+		t.Fatalf("update evidence with replacement: %v", err)
+	}
+	if updated.ProposalState != constants.ProposalDraft || updated.Version != revision.Version+1 {
+		t.Fatalf("updated proposal = %#v, want draft with incremented version", updated)
+	}
+	validated2 := authorAdvance(t, svc, proposal.ID, updated.Version, constants.ProposalValidated, author)
+	submitted2 := authorAdvance(t, svc, proposal.ID, validated2.Version, constants.ProposalSubmitted, author)
+	reviewed2, err := svc.TransitionProposal(proposal.ID, dto.ProposalTransitionRequest{To: string(constants.ProposalReviewed), Version: submitted2.Version}, reviewer)
+	if err != nil {
+		t.Fatalf("re-review re-supported proposal: %v", err)
+	}
+	accepted, err := svc.TransitionProposal(proposal.ID, dto.ProposalTransitionRequest{To: string(constants.ProposalAccepted), Version: reviewed2.Version}, reviewer)
+	if err != nil {
+		t.Fatalf("accept re-supported proposal: %v", err)
+	}
+	if accepted.ProposalState != constants.ProposalAccepted {
+		t.Fatalf("final proposal state = %s, want accepted", accepted.ProposalState)
+	}
+}
+
+func TestUpdateProposalEvidenceRejectsWrongParcelAndVoidedObservation(t *testing.T) {
+	svc, _ := newCadastralTestService(t)
+	author := testActor(821, constants.RoleSurveyor, "evidence-repair-author")
+	parcel := createTestParcel(t, svc, "P-EVIDENCE-A", serviceTestPolygon(`[0,0],[10,0],[10,10],[0,10],[0,0]`), author)
+	otherParcel := createTestParcel(t, svc, "P-EVIDENCE-B", serviceTestPolygon(`[20,0],[30,0],[30,10],[20,10],[20,0]`), author)
+	good := importTestObservation(t, svc, parcel, "OBS-GOOD", author)
+	foreign := importTestObservation(t, svc, otherParcel, "OBS-FOREIGN", author)
+	voided := importTestObservation(t, svc, parcel, "OBS-VOIDED-REPAIR", author)
+	if _, err := svc.TransitionObservation(voided.ID, dto.ObservationTransitionRequest{To: "rejected", Version: voided.Version}, author); err != nil {
+		t.Fatalf("reject observation: %v", err)
+	}
+	proposal, err := svc.CreateProposal(dto.CreateProposalRequest{
+		ParcelID: parcel.ID, BaseVersion: parcel.BoundaryVersion, ProposedGeoJSON: serviceTestPolygon(`[0,0],[10,0],[10,10],[0,10],[0,0]`),
+		ObservationIDs: []uint{good.ID}, SnapToleranceM: 0.1, Rationale: "initial evidence",
+	}, author)
+	if err != nil {
+		t.Fatalf("create proposal: %v", err)
+	}
+
+	_, err = svc.UpdateProposalEvidence(proposal.ID, dto.UpdateProposalEvidenceRequest{Version: proposal.Version, ObservationIDs: []uint{foreign.ID}}, author)
+	var appErr *AppError
+	if !errors.As(err, &appErr) || appErr.Status != 400 {
+		t.Fatalf("wrong parcel evidence error = %v, want 400", err)
+	}
+	_, err = svc.UpdateProposalEvidence(proposal.ID, dto.UpdateProposalEvidenceRequest{Version: proposal.Version, ObservationIDs: []uint{voided.ID}}, author)
+	if !errors.As(err, &appErr) || appErr.Code != CodeConflict || appErr.Status != 409 {
+		t.Fatalf("voided evidence error = %v, want 409 %s", err, CodeConflict)
+	}
+	// Duplicate references are bad input.
+	_, err = svc.UpdateProposalEvidence(proposal.ID, dto.UpdateProposalEvidenceRequest{Version: proposal.Version, ObservationIDs: []uint{good.ID, good.ID}}, author)
+	if !errors.As(err, &appErr) || appErr.Status != 400 {
+		t.Fatalf("duplicate evidence error = %v, want 400", err)
+	}
+	persisted, err := svc.GetProposal(proposal.ID)
+	if err != nil {
+		t.Fatalf("reload proposal: %v", err)
+	}
+	if persisted.Version != proposal.Version || persisted.ProposalState != constants.ProposalDraft {
+		t.Fatalf("proposal changed after failed evidence updates: %#v", persisted.BoundaryProposal)
 	}
 }

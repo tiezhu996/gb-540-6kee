@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onMounted, reactive, ref } from 'vue'
 import { ElMessageBox } from 'element-plus'
-import { Check, FilePlus, RefreshCw, ScanSearch, X } from 'lucide-vue-next'
+import { Check, AlertTriangle, FilePlus, RefreshCw, ScanSearch, X } from 'lucide-vue-next'
 import PageHeader from '@/components/common/PageHeader.vue'
 import TopologyLegend from '@/components/common/TopologyLegend.vue'
 import GeometryEvidenceDrawer from '@/components/common/GeometryEvidenceDrawer.vue'
@@ -27,8 +27,17 @@ function typeLabel(value: unknown) {
   return conflictTypeLabel[value as keyof typeof conflictTypeLabel] ?? String(value)
 }
 
+function proposalFor(conflict: TopologyConflict) {
+  return proposals.items.find((proposal) => proposal.id === conflict.proposal_id) ?? null
+}
+
 function proposalStateFor(conflict: TopologyConflict): ProposalState | null {
-  return proposals.items.find((proposal) => proposal.id === conflict.proposal_id)?.proposal_state ?? null
+  return proposalFor(conflict)?.proposal_state ?? null
+}
+
+function proposalHasVoidedEvidence(conflict: TopologyConflict) {
+  const proposal = proposalFor(conflict)
+  return !!proposal?.evidence && !proposal.evidence.evidence_valid
 }
 
 function parcelLabelFor(conflict: TopologyConflict) {
@@ -91,7 +100,7 @@ onMounted(load)
     <div class="data-surface">
       <el-table v-loading="conflicts.loading" :data="conflicts.items" row-key="id">
         <el-table-column label="冲突" width="90"><template #default="scope"><strong>#{{ scope.row.id }}</strong></template></el-table-column>
-        <el-table-column label="参与地块" min-width="180"><template #default="scope"><strong>{{ parcelLabelFor(scope.row) }}</strong><small class="muted">提案 #{{ scope.row.proposal_id }}</small><ProposalStateBadge :state="proposalStateFor(scope.row)" /></template></el-table-column>
+        <el-table-column label="参与地块" min-width="180"><template #default="scope"><strong>{{ parcelLabelFor(scope.row) }}</strong><small class="muted">提案 #{{ scope.row.proposal_id }}</small><div class="proposal-state-line"><ProposalStateBadge :state="proposalStateFor(scope.row)" /><el-tooltip v-if="proposalHasVoidedEvidence(scope.row)" placement="top" :show-after="150"><template #content><span>该提案引用的观测已失效，提交与采纳已被阻断，请到提案页更换证据</span></template><span class="voided-hint"><AlertTriangle :size="12" />证据失效</span></el-tooltip></div></template></el-table-column>
         <el-table-column label="类型" width="125"><template #default="scope"><span :class="['conflict-tag', `tone-${scope.row.conflict_type}`]">{{ typeLabel(scope.row.conflict_type) }}</span></template></el-table-column>
         <el-table-column prop="severity" label="严重度" width="95" />
         <el-table-column label="量级" width="125"><template #default="scope">{{ scope.row.magnitude_square_m.toFixed(2) }} m²</template></el-table-column>
@@ -116,5 +125,7 @@ onMounted(load)
 .tone-overlap { color: #9c3028; background: #fbeceb; border-color: #e6afaa; }.tone-gap { color: #755310; background: #fff5db; border-color: #e0c16b; }.tone-self_intersection { color: #7b4c9e; background: #f4ecfa; }.tone-dangling_edge { color: #2b6f96; background: #e8f2f7; }
 .muted { display: block; margin-top: 4px; color: var(--text-muted); font-size: 11px; }
 .conflict-actions { display: flex; flex-wrap: wrap; gap: 2px; }
+.proposal-state-line { display: flex; align-items: center; gap: 6px; margin-top: 3px; }
+.voided-hint { display: inline-flex; align-items: center; gap: 3px; padding: 1px 6px; border-radius: 3px; color: #9c3028; background: #fbeceb; border: 1px solid #e6afaa; font-size: 11px; font-weight: 700; cursor: help; }
 .status-pill.confirmed, .status-pill.resolution_proposed { color: #755310; background: #fff5db; }.status-pill.resolved { color: #17604e; background: #e8f4f0; }.status-pill.false_positive, .status-pill.closed { color: #4b5551; background: #e8ecea; }
 </style>

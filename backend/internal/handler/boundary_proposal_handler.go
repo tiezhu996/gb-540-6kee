@@ -26,7 +26,12 @@ func (h *CadastralHandler) CreateProposal(c *gin.Context) {
 		fail(c, err)
 		return
 	}
-	ok(c, http.StatusCreated, item, nil)
+	view, err := h.service.BuildProposalView(item)
+	if err != nil {
+		fail(c, err)
+		return
+	}
+	ok(c, http.StatusCreated, view, nil)
 }
 
 func (h *CadastralHandler) GetProposal(c *gin.Context) {
@@ -34,12 +39,12 @@ func (h *CadastralHandler) GetProposal(c *gin.Context) {
 	if !valid {
 		return
 	}
-	item, err := h.service.GetProposal(id)
+	view, err := h.service.GetProposal(id)
 	if err != nil {
 		fail(c, err)
 		return
 	}
-	ok(c, http.StatusOK, item, nil)
+	ok(c, http.StatusOK, view, nil)
 }
 
 func (h *CadastralHandler) TransitionProposal(c *gin.Context) {
@@ -56,5 +61,32 @@ func (h *CadastralHandler) TransitionProposal(c *gin.Context) {
 		fail(c, err)
 		return
 	}
-	ok(c, http.StatusOK, item, nil)
+	view, err := h.service.BuildProposalView(item)
+	if err != nil {
+		fail(c, err)
+		return
+	}
+	ok(c, http.StatusOK, view, nil)
+}
+
+func (h *CadastralHandler) UpdateProposalEvidence(c *gin.Context) {
+	id, valid := idParam(c)
+	if !valid {
+		return
+	}
+	var req dto.UpdateProposalEvidenceRequest
+	if !bind(c, h.validate, &req) {
+		return
+	}
+	item, err := h.service.UpdateProposalEvidence(id, req, actor(c))
+	if err != nil {
+		fail(c, err)
+		return
+	}
+	view, err := h.service.BuildProposalView(item)
+	if err != nil {
+		fail(c, err)
+		return
+	}
+	ok(c, http.StatusOK, view, nil)
 }

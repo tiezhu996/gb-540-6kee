@@ -62,3 +62,22 @@ func (r *BoundaryProposalRepository) Transition(id, version uint, from, to const
 	}
 	return nil
 }
+
+// UpdateEvidence rewrites the archived observation_ids of a proposal. It is a
+// conditional update so a stale editor never overwrites concurrent changes.
+// resetState is set when evidence changes after validation, moving the
+// proposal back to draft so it must be re-validated before submission.
+func (r *BoundaryProposalRepository) UpdateEvidence(id, version uint, observationJSON string, resetState bool) error {
+	updates := map[string]any{"observation_ids": observationJSON, "version": gorm.Expr("version + 1")}
+	if resetState {
+		updates["proposal_state"] = constants.ProposalDraft
+	}
+	result := r.db.Model(&model.BoundaryProposal{}).Where("id = ? AND version = ?", id, version).Updates(updates)
+	if result.Error != nil {
+		return fmt.Errorf("update proposal evidence: %w", result.Error)
+	}
+	if result.RowsAffected == 0 {
+		return fmt.Errorf("proposal version changed: %w", gorm.ErrInvalidTransaction)
+	}
+	return nil
+}

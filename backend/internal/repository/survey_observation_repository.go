@@ -31,6 +31,23 @@ func (r *SurveyObservationRepository) Get(id uint) (model.SurveyObservation, err
 	return item, nil
 }
 
+// ListByIDs loads referenced evidence in one query so proposal evidence can
+// be validated without an N+1 lookup.
+func (r *SurveyObservationRepository) ListByIDs(ids []uint) (map[uint]model.SurveyObservation, error) {
+	result := make(map[uint]model.SurveyObservation, len(ids))
+	if len(ids) == 0 {
+		return result, nil
+	}
+	var items []model.SurveyObservation
+	if err := r.db.Where("id IN ?", ids).Find(&items).Error; err != nil {
+		return nil, fmt.Errorf("list observations by ids: %w", err)
+	}
+	for _, item := range items {
+		result[item.ID] = item
+	}
+	return result, nil
+}
+
 func (r *SurveyObservationRepository) List(q dto.ObservationQuery) ([]model.SurveyObservation, int64, error) {
 	db := r.db.Model(&model.SurveyObservation{})
 	if q.ParcelID != nil {

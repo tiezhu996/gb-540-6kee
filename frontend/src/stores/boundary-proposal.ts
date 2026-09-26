@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import { boundaryProposalApi, type ProposalCreateInput, type ProposalQuery, type ProposalTransitionInput } from '@/api/boundary-proposal'
+import { boundaryProposalApi, type ProposalCreateInput, type ProposalEvidenceInput, type ProposalQuery, type ProposalTransitionInput } from '@/api/boundary-proposal'
 import type { BoundaryProposal } from '@/types/boundary-proposal'
 
 export const useBoundaryProposalStore = defineStore('boundary-proposals', () => {
@@ -29,10 +29,16 @@ export const useBoundaryProposalStore = defineStore('boundary-proposals', () => 
     return data.data
   }
 
+  async function updateEvidence(id: number, body: ProposalEvidenceInput) {
+    const { data } = await boundaryProposalApi.updateEvidence(id, body)
+    replace(data.data)
+    return data.data
+  }
+
   function replace(item: BoundaryProposal) {
     const index = items.value.findIndex((current) => current.id === item.id)
     if (index >= 0) items.value[index] = item
   }
 
-  return { items, loading, fetch, create, transition }
+  return { items, loading, fetch, create, transition, updateEvidence }
 })
